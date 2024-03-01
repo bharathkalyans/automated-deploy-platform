@@ -152,6 +152,7 @@ func sendToKafka(buildID string, request CollectRequest) error {
 	fmt.Println(" \nSent the Topic to Kafka Server .....")
 	// Wait for message deliveries before shutting down
 	p.Flush(15 * 1000)
+	// p.Close()
 
 	return nil
 }
