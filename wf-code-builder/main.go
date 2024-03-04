@@ -9,8 +9,11 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"time"
 
 	"github.com/confluentinc/confluent-kafka-go/kafka"
+	"github.com/docker/docker/api/types"
+	"github.com/docker/docker/client"
 	"github.com/go-redis/redis/v8"
 	"github.com/gorilla/mux"
 	_ "github.com/lib/pq"
@@ -20,6 +23,19 @@ var db *sql.DB
 var ctx = context.Background()
 var redisClient *redis.Client
 var concurrentBuilds = make(chan struct{}, 3)
+var dockerClient *client.Client
+
+type BuildEvent struct {
+	BuildID          string           `json:"build_id"`
+	ProjectGitHubURL string           `json:"project_github_url"`
+	Events           map[string]Event `json:"events"`
+}
+
+type Event struct {
+	Timestamp time.Time `json:"timestamp"`
+	Reason    string    `json:"reason,omitempty"`
+	URL       string    `json:"url,omitempty"`
+}
 
 func init() {
 	connStr := "postgresql://postgres:@localhost:5432/golang?sslmode=disable"
@@ -41,18 +57,20 @@ func init() {
 		DB:       0,                // Default DB
 	})
 
-	// Test the connection
 	_, err = redisClient.Ping(ctx).Result()
 	if err != nil {
 		panic(fmt.Sprintf("Failed to connect to Redis: %v", err))
 	}
 
+	dockerClient, err = client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
+	if err != nil {
+		log.Fatal(err)
+	}
 }
 
 func main() {
 
 	r := mux.NewRouter()
-	// r.Use(loggingMiddleware)
 
 	fmt.Println("wf-code-builder started at PORT :: 8082")
 
@@ -129,6 +147,16 @@ func startBuildProcessor() {
 			// Implement your Docker API logic here
 			fmt.Println("Using Docker API to process it .... .... ...")
 			// Simulate build success or error
+			containers, err := listContainers()
+			if err != nil {
+				log.Fatal(err)
+			}
+
+			fmt.Println("Containers:")
+			for _, container := range containers {
+				fmt.Printf("ID: %s, Image: %s, State: %s\n", container.ID, container.Image, container.State)
+			}
+
 			buildSuccess := true
 			if buildSuccess {
 				// Save build information to PostgreSQL
@@ -177,4 +205,14 @@ func saveToPostgres(buildEvent string) {
 	}
 
 	fmt.Println("Build information saved to PostgreSQL.")
+}
+
+func listContainers() ([]types.Container, error) {
+	// Get a list of containers
+	containers, err := dockerClient.ContainerList(context.Background(), types.ContainerListOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("failed to list containers: %v", err)
+	}
+
+	return containers, nil
 }
