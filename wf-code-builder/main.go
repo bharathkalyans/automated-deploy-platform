@@ -9,11 +9,14 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
+	"os/exec"
 	"time"
 
 	"github.com/confluentinc/confluent-kafka-go/kafka"
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/client"
+	"github.com/docker/go-connections/nat"
 	"github.com/go-redis/redis/v8"
 	"github.com/gorilla/mux"
 	_ "github.com/lib/pq"
@@ -24,18 +27,6 @@ var ctx = context.Background()
 var redisClient *redis.Client
 var concurrentBuilds = make(chan struct{}, 3)
 var dockerClient *client.Client
-
-type BuildEvent struct {
-	BuildID          string           `json:"build_id"`
-	ProjectGitHubURL string           `json:"project_github_url"`
-	Events           map[string]Event `json:"events"`
-}
-
-type Event struct {
-	Timestamp time.Time `json:"timestamp"`
-	Reason    string    `json:"reason,omitempty"`
-	URL       string    `json:"url,omitempty"`
-}
 
 func init() {
 	connStr := "postgresql://postgres:@localhost:5432/golang?sslmode=disable"
@@ -95,7 +86,6 @@ func main() {
 
 	go startBuildProcessor()
 
-	// Start consuming messages
 	for {
 		msg, err := consumer.ReadMessage(-1)
 		if err == nil {
@@ -106,7 +96,6 @@ func main() {
 		}
 
 	}
-	// consumer.Close()
 
 }
 
@@ -120,77 +109,129 @@ func processBuildEvent(buildEvent string) {
 
 func startBuildProcessor() {
 	for {
-		// Dequeue build events from Redis
 		buildEvent, err := redisClient.RPop(ctx, "build_queue").Result()
 		if err == redis.Nil {
-			// No build events in the queue, wait or perform other tasks
 			continue
 		} else if err != nil {
 			fmt.Printf("Failed to dequeue build event from Redis queue: %v\n", err)
 			continue
 		}
+		var buildInfo map[string]interface{}
+		err = json.Unmarshal([]byte(buildEvent), &buildInfo)
+		if err != nil {
+			fmt.Printf("Failed to unmarshal build event JSON: %v\n", err)
+			return
+		}
 
-		// Acquire a semaphore to control concurrency
+		// Create an "events" map if it doesn't exist
+		events, ok := buildInfo["events"].(map[string]interface{})
+		if !ok {
+			events = make(map[string]interface{})
+			buildInfo["events"] = events
+		}
+
+		events["BUILD_QUEUED"] = map[string]interface{}{
+			"timestamp": time.Now(),
+		}
+
+		fmt.Println("Github URL :: ", buildInfo["project_github_url"])
 		concurrentBuilds <- struct{}{}
 
 		// Process build event concurrently
 		go func(buildEvent string) {
 			defer func() {
-				// Release the semaphore when processing is done
 				<-concurrentBuilds
 			}()
-
+			events["BUILD_STARTED"] = map[string]interface{}{
+				"timestamp": time.Now(),
+			}
 			// Process the build event here
 			fmt.Printf("Processing build event: %s\n", buildEvent)
 
 			// Use Docker API to generate a build with the given build command
-			// Implement your Docker API logic here
-			fmt.Println("Using Docker API to process it .... .... ...")
-			// Simulate build success or error
-			containers, err := listContainers()
-			if err != nil {
-				log.Fatal(err)
-			}
+			fmt.Println("Using Docker API to process it ... \n")
 
-			fmt.Println("Containers:")
-			for _, container := range containers {
-				fmt.Printf("ID: %s, Image: %s, State: %s\n", container.ID, container.Image, container.State)
-			}
+			// containers, err := listContainers()
+			// if err != nil {
+			// 	log.Fatal(err)
+			// }
+
+			// fmt.Println("Containers:")
+			// for _, container := range containers {
+			// 	fmt.Printf("ID: %s, Image: %s, State: %s\n", container.ID, container.Image, container.State)
+			// }
 
 			buildSuccess := true
 			if buildSuccess {
-				// Save build information to PostgreSQL
-				saveToPostgres(buildEvent)
+				fmt.Println("Build Succeeded !!!!!!")
+				events["BUILD_PASSED"] = map[string]interface{}{
+					"timestamp": time.Now(),
+				}
+				events["DEPLOY_PASSED"] = map[string]interface{}{
+					"timestamp":          time.Now(),
+					"branded_access_url": `https://localhost:3000/` + buildInfo["build_id"].(string),
+					"url":                "https://localhost:7234",
+				}
 			} else {
-				// Handle build error
 				fmt.Println("Build failed !!!!!!")
+				events["BUILD_FAILED"] = map[string]interface{}{
+					"timestamp": time.Now(),
+					"reason":    "GITHUB URL NOT FOUND",
+				}
+				events["DEPLOY_FAILED"] = map[string]interface{}{
+					"timestamp": time.Now(),
+					"reason":    "Build Failed",
+				}
 			}
+			saveToPostgres(&buildInfo)
 
 		}(buildEvent)
 	}
 }
 
-func saveToPostgres(buildEvent string) {
-	var buildInfo map[string]interface{}
-	err := json.Unmarshal([]byte(buildEvent), &buildInfo)
-	if err != nil {
-		fmt.Printf("Failed to unmarshal build event JSON: %v\n", err)
-		return
-	}
+func dockerImplementation() {
 
-	buildID, ok := buildInfo["build_id"].(string)
+}
+
+func cloneReactApp(repoURL, cloneDir string) error {
+	fmt.Println("Cloning React app...")
+	cmd := exec.Command("git", "clone", repoURL, cloneDir)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
+}
+
+func generatePortBindings(portMappings map[string]string) map[nat.Port][]nat.PortBinding {
+	portBindings := make(map[nat.Port][]nat.PortBinding)
+	for containerPort, hostPort := range portMappings {
+		binding := nat.PortBinding{
+			HostIP:   "0.0.0.0",
+			HostPort: hostPort,
+		}
+		port, err := nat.NewPort("tcp", containerPort)
+		if err != nil {
+			log.Fatal(err)
+		}
+		portBindings[port] = []nat.PortBinding{binding}
+	}
+	return portBindings
+}
+
+func saveToPostgres(buildInfo *map[string]interface{}) {
+	buildID, ok := (*buildInfo)["build_id"].(string)
 	if !ok {
 		fmt.Println("Build ID not found in build event.")
 		return
 	}
 
-	projectGitHubURL, ok := buildInfo["project_github_url"].(string)
+	projectGitHubURL, ok := (*buildInfo)["project_github_url"].(string)
 	if !ok {
 		fmt.Println("Project GitHub URL not found in build event.")
 		return
 	}
+	eventsJSON, err := json.Marshal((*buildInfo)["events"])
 
-	eventsJSON, err := json.Marshal(buildInfo["events"])
+	// fmt.Println("build info :: ", (*buildInfo)["events"])
 	if err != nil {
 		fmt.Printf("Failed to marshal events JSON: %v\n", err)
 		return
@@ -208,7 +249,6 @@ func saveToPostgres(buildEvent string) {
 }
 
 func listContainers() ([]types.Container, error) {
-	// Get a list of containers
 	containers, err := dockerClient.ContainerList(context.Background(), types.ContainerListOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("failed to list containers: %v", err)

@@ -1,4 +1,4 @@
-module github.com/bharathkalyans/golang-assignment-3
+module collect-client
 
 go 1.22.0
 

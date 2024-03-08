@@ -1,4 +1,4 @@
-module github.com/bharathkalyans/golang-webknot-3
+module code-builder
 
 go 1.22.0
 

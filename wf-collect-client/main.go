@@ -7,32 +7,13 @@ import (
 	"log"
 	"net/http"
 
+	"collect-client/models"
+
 	"github.com/confluentinc/confluent-kafka-go/kafka"
 	"github.com/google/uuid"
 	"github.com/gorilla/mux"
 	_ "github.com/lib/pq"
 )
-
-type CollectRequest struct {
-	ProjectGithubURL string `json:"project_github_url"`
-	BuildCommand     string `json:"build_command"`
-	BuildOutDir      string `json:"build_out_dir"`
-}
-
-type CollectResponse struct {
-	BuildID string `json:"build_id"`
-}
-
-type BuildEvent struct {
-	BuildID string `json:"build_id"`
-	Event   string `json:"event"`
-}
-
-type BuildInfo struct {
-	BuildID          string          `json:"build_id"`
-	ProjectGithubURL string          `json:"project_github_url"`
-	Events           json.RawMessage `json:"events"`
-}
 
 const (
 	BuildQueued  = "BUILD_QUEUED"
@@ -58,11 +39,10 @@ func init() {
 		log.Fatal(err)
 	}
 	fmt.Println("DB connection succesful ....")
+	createDataTable(db)
 }
 
 func main() {
-
-	// createDataTable(db)
 
 	r := mux.NewRouter()
 	r.Use(loggingMiddleware)
@@ -82,7 +62,7 @@ func BuildInfoHandler(w http.ResponseWriter, r *http.Request) {
 	query := "SELECT * FROM data WHERE build_id = $1"
 	row := db.QueryRow(query, buildID)
 
-	var buildInfo BuildInfo
+	var buildInfo models.BuildInfo
 	err := row.Scan(&buildInfo.BuildID, &buildInfo.ProjectGithubURL, &buildInfo.Events)
 	switch {
 	case err == sql.ErrNoRows:
@@ -98,7 +78,7 @@ func BuildInfoHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func CollectHandler(w http.ResponseWriter, r *http.Request) {
-	var collectRequest CollectRequest
+	var collectRequest models.CollectRequest
 
 	decoder := json.NewDecoder(r.Body)
 	err := decoder.Decode(&collectRequest)
@@ -121,12 +101,12 @@ func CollectHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Return the build ID to the user
-	response := CollectResponse{BuildID: buildID}
+	response := models.CollectResponse{BuildID: buildID}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(response)
 }
 
-func sendToKafka(buildID string, request CollectRequest) error {
+func sendToKafka(buildID string, request models.CollectRequest) error {
 	p, err := kafka.NewProducer(&kafka.ConfigMap{"bootstrap.servers": "localhost:9092"})
 	if err != nil {
 		return err
@@ -137,9 +117,6 @@ func sendToKafka(buildID string, request CollectRequest) error {
 
 	message := fmt.Sprintf(`{"build_id": "%s", "project_github_url": "%s", "build_command": "%s", "build_out_dir": "%s"}`,
 		buildID, request.ProjectGithubURL, request.BuildCommand, request.BuildOutDir)
-
-	// event := BuildEvent{BuildID: buildID, Event: "BUILD_QUEUED"}
-	// message, _ := json.Marshal(event)
 
 	err = p.Produce(&kafka.Message{
 		TopicPartition: kafka.TopicPartition{Topic: &topic, Partition: kafka.PartitionAny},
