@@ -9,14 +9,10 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"os"
-	"os/exec"
 	"time"
 
 	"github.com/confluentinc/confluent-kafka-go/kafka"
-	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/client"
-	"github.com/docker/go-connections/nat"
 	"github.com/go-redis/redis/v8"
 	"github.com/gorilla/mux"
 	_ "github.com/lib/pq"
@@ -148,20 +144,8 @@ func startBuildProcessor() {
 			// Process the build event here
 			fmt.Printf("Processing build event: %s\n", buildEvent)
 
-			// Use Docker API to generate a build with the given build command
-			fmt.Println("Using Docker API to process it ... \n")
-
-			// containers, err := listContainers()
-			// if err != nil {
-			// 	log.Fatal(err)
-			// }
-
-			// fmt.Println("Containers:")
-			// for _, container := range containers {
-			// 	fmt.Printf("ID: %s, Image: %s, State: %s\n", container.ID, container.Image, container.State)
-			// }
-
-			buildSuccess := true
+			buildSuccess, portNumber := dockerImplementation(&buildInfo)
+			fmt.Printf("Build Success :: %v on Port Number %v", buildSuccess, portNumber)
 			if buildSuccess {
 				fmt.Println("Build Succeeded !!!!!!")
 				events["BUILD_PASSED"] = map[string]interface{}{
@@ -170,7 +154,7 @@ func startBuildProcessor() {
 				events["DEPLOY_PASSED"] = map[string]interface{}{
 					"timestamp":          time.Now(),
 					"branded_access_url": `https://localhost:8080/` + buildInfo["build_id"].(string),
-					"url":                "https://localhost:7234",
+					"url":                `https://localhost:` + portNumber,
 				}
 			} else {
 				fmt.Println("Build failed !!!!!!")
@@ -189,32 +173,23 @@ func startBuildProcessor() {
 	}
 }
 
-func dockerImplementation() {
+func dockerImplementation(buildInfo *map[string]interface{}) (bool, string) {
+	fmt.Println("Inside the Docker Function")
+	fmt.Println("build info :: ", (*buildInfo))
 
-}
+	// Extract GitHub URL and build command from buildInfo
+	// githubURL, ok := (*buildInfo)["project_github_url"].(string)
+	// if !ok {
+	// 	fmt.Println("GitHub URL not found in buildInfo")
+	// 	return false, ""
+	// }
+	// buildCommand, ok := (*buildInfo)["build_command"].(string)
+	// if !ok {
+	// 	fmt.Println("Build command not found in buildInfo")
+	// 	return false, ""
+	// }
 
-func cloneReactApp(repoURL, cloneDir string) error {
-	fmt.Println("Cloning React app...")
-	cmd := exec.Command("git", "clone", repoURL, cloneDir)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	return cmd.Run()
-}
-
-func generatePortBindings(portMappings map[string]string) map[nat.Port][]nat.PortBinding {
-	portBindings := make(map[nat.Port][]nat.PortBinding)
-	for containerPort, hostPort := range portMappings {
-		binding := nat.PortBinding{
-			HostIP:   "0.0.0.0",
-			HostPort: hostPort,
-		}
-		port, err := nat.NewPort("tcp", containerPort)
-		if err != nil {
-			log.Fatal(err)
-		}
-		portBindings[port] = []nat.PortBinding{binding}
-	}
-	return portBindings
+	return true, "1123"
 }
 
 func saveToPostgres(buildInfo *map[string]interface{}) {
@@ -246,13 +221,4 @@ func saveToPostgres(buildInfo *map[string]interface{}) {
 	}
 
 	fmt.Println("Build information saved to PostgreSQL.")
-}
-
-func listContainers() ([]types.Container, error) {
-	containers, err := dockerClient.ContainerList(context.Background(), types.ContainerListOptions{})
-	if err != nil {
-		return nil, fmt.Errorf("failed to list containers: %v", err)
-	}
-
-	return containers, nil
 }
