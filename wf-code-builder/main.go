@@ -169,7 +169,7 @@ func startBuildProcessor() {
 				}
 				events["DEPLOY_PASSED"] = map[string]interface{}{
 					"timestamp":          time.Now(),
-					"branded_access_url": `https://localhost:3000/` + buildInfo["build_id"].(string),
+					"branded_access_url": `https://localhost:8080/` + buildInfo["build_id"].(string),
 					"url":                "https://localhost:7234",
 				}
 			} else {
