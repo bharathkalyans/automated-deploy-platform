@@ -3,12 +3,17 @@
 package main
 
 import (
+	"code-builder/models"
 	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log"
+	"math/rand"
+	"net"
 	"net/http"
+	"os/exec"
+	"strconv"
 	"time"
 
 	"github.com/confluentinc/confluent-kafka-go/kafka"
@@ -138,33 +143,23 @@ func startBuildProcessor() {
 			defer func() {
 				<-concurrentBuilds
 			}()
-			events["BUILD_STARTED"] = map[string]interface{}{
-				"timestamp": time.Now(),
-			}
+			// events["BUILD_STARTED"] = map[string]interface{}{
+			// 	"timestamp": time.Now(),
+			// }
 			// Process the build event here
 			fmt.Printf("Processing build event: %s\n", buildEvent)
 
 			buildSuccess, portNumber := dockerImplementation(&buildInfo)
-			fmt.Printf("Build Success :: %v on Port Number %v", buildSuccess, portNumber)
+
 			if buildSuccess {
-				fmt.Println("Build Succeeded !!!!!!")
-				events["BUILD_PASSED"] = map[string]interface{}{
-					"timestamp": time.Now(),
-				}
-				events["DEPLOY_PASSED"] = map[string]interface{}{
-					"timestamp":          time.Now(),
-					"branded_access_url": `https://localhost:8080/` + buildInfo["build_id"].(string),
-					"url":                `https://localhost:` + portNumber,
-				}
+
+				fmt.Printf("Build Succeeded and Running :: %v on Port Number %v \n", buildSuccess, portNumber)
+
 			} else {
 				fmt.Println("Build failed !!!!!!")
 				events["BUILD_FAILED"] = map[string]interface{}{
 					"timestamp": time.Now(),
-					"reason":    "GITHUB URL NOT FOUND",
-				}
-				events["DEPLOY_FAILED"] = map[string]interface{}{
-					"timestamp": time.Now(),
-					"reason":    "Build Failed",
+					"reason":    "External Reasons",
 				}
 			}
 			saveToPostgres(&buildInfo)
@@ -174,22 +169,109 @@ func startBuildProcessor() {
 }
 
 func dockerImplementation(buildInfo *map[string]interface{}) (bool, string) {
-	fmt.Println("Inside the Docker Function")
-	fmt.Println("build info :: ", (*buildInfo))
 
-	// Extract GitHub URL and build command from buildInfo
-	// githubURL, ok := (*buildInfo)["project_github_url"].(string)
-	// if !ok {
-	// 	fmt.Println("GitHub URL not found in buildInfo")
-	// 	return false, ""
-	// }
-	// buildCommand, ok := (*buildInfo)["build_command"].(string)
-	// if !ok {
-	// 	fmt.Println("Build command not found in buildInfo")
-	// 	return false, ""
-	// }
+	buildDetails := models.BuildRequestDetails{
+		BuildId:          (*buildInfo)["build_id"].(string),
+		ProjectGithubUrl: (*buildInfo)["project_github_url"].(string),
+		BuildCommand:     (*buildInfo)["build_command"].(string),
+		BuildOutDir:      (*buildInfo)["build_out_dir"].(string),
+	}
 
-	return true, "1123"
+	fmt.Println("Creating docker build....")
+	cmd := exec.Command("docker", "build", "-t", "docker-react-app:latest", ".")
+	cmd.Dir = "./docker-app"
+
+	if _, err := cmd.CombinedOutput(); err != nil {
+		fmt.Println("Failed to build the image: ", err)
+		return false, ""
+	}
+	fmt.Println("Docker Image Created Successfully ...")
+	if (*buildInfo)["events"] == nil {
+		(*buildInfo)["events"] = make(map[string]interface{})
+	}
+	events := (*buildInfo)["events"].(map[string]interface{})
+	events["BUILD_STARTED"] = map[string]interface{}{
+		"timestamp": time.Now(),
+	}
+
+	fmt.Println("Cloning Repository and Generating the Build ....")
+	buildIdArg := fmt.Sprintf("BUILD_ID=%s", buildDetails.BuildId)
+	cmd = exec.Command("docker", "run", "-e", buildIdArg, "-v", "wf-storage:/wf/storage", "docker-react-app:latest", "-p", buildDetails.ProjectGithubUrl, "-b", buildDetails.BuildCommand, "-o", buildDetails.BuildOutDir)
+	scriptFileOutput, err := cmd.CombinedOutput()
+	if err != nil {
+		fmt.Println("Unable to clone the repository: ", err)
+		fmt.Println(string(scriptFileOutput))
+
+		events["BUILD_FAILED"] = map[string]interface{}{
+			"timestamp": time.Now(),
+			"reason":    string(scriptFileOutput),
+		}
+
+		return false, ""
+	}
+	fmt.Println("Repository cloned and generating build")
+	events["BUILD_PASSED"] = map[string]interface{}{
+		"timestamp": time.Now(),
+	}
+
+	port, available := generateAndCheckPort()
+	if !available {
+		fmt.Println("All ports are in use")
+		events["DEPLOY_FAILED"] = map[string]interface{}{
+			"timestamp": time.Now(),
+			"reason":    "Ports couldnt be alloted!!!",
+		}
+		return false, ""
+	}
+
+	fmt.Println("Deployment Started....")
+	events["DEPLOY_STARTED"] = map[string]interface{}{
+		"timestamp": time.Now(),
+	}
+
+	pathArg := fmt.Sprintf("/var/lib/docker/volumes/wf-storage/_data/%s:/usr/share/nginx/html", buildDetails.BuildId)
+	portArg := fmt.Sprintf("%d:80", port)
+	serverNameArg := fmt.Sprintf("server-%s", buildDetails.BuildId)
+
+	deployCmd := exec.Command("docker", "run", "--rm", "-d", "-p", portArg, "--name", serverNameArg, "-v", "wf-storage:/mnt", "-v", pathArg, "nginx")
+	deployOutput, err := deployCmd.CombinedOutput()
+	if err != nil {
+		fmt.Println("Something went wrong while Deploying: ", err)
+		fmt.Println(string(deployOutput))
+
+		events["DEPLOY_FAILED"] = map[string]interface{}{
+			"timestamp": time.Now(),
+			"reason":    string(deployOutput),
+		}
+
+		return false, ""
+	}
+	deployedUrl := fmt.Sprintf("http://localhost:%d", port)
+	accessUrl := fmt.Sprintf("http://localhost:8080/%s", buildDetails.BuildId)
+	fmt.Printf("Deployed Successfully at port %d\n", port)
+	fmt.Printf("Access your website on URL :: %s\n", deployedUrl)
+
+	events["DEPLOY_PASSED"] = map[string]interface{}{
+		"timestamp":          time.Now(),
+		"branded_access_url": accessUrl,
+		"url":                deployedUrl,
+	}
+
+	return true, strconv.Itoa(port)
+}
+
+func generateAndCheckPort() (int, bool) {
+
+	// Generate random port between 5000 and 10000
+	port := rand.Intn(5001) + 5000
+
+	listener, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
+	if err != nil {
+		return port, false
+	}
+
+	listener.Close()
+	return port, true
 }
 
 func saveToPostgres(buildInfo *map[string]interface{}) {
@@ -220,5 +302,5 @@ func saveToPostgres(buildInfo *map[string]interface{}) {
 		return
 	}
 
-	fmt.Println("Build information saved to PostgreSQL.")
+	fmt.Println("Build information saved to Datastore.")
 }
