@@ -90,7 +90,8 @@ func main() {
 	for {
 		msg, err := consumer.ReadMessage(-1)
 		if err == nil {
-			fmt.Printf("Message on %s: %s\n\n", msg.TopicPartition, string(msg.Value))
+			fmt.Println("Received the kafka Topic")
+			// fmt.Printf("Message on %s: %s\n\n", msg.TopicPartition, string(msg.Value))
 			processBuildEvent(string(msg.Value))
 		} else {
 			fmt.Printf("Consumer error: %v (%v)\n", err, msg)
@@ -135,7 +136,7 @@ func startBuildProcessor() {
 			"timestamp": time.Now(),
 		}
 
-		fmt.Println("Github URL :: ", buildInfo["project_github_url"])
+		// fmt.Println("Github URL :: ", buildInfo["project_github_url"])
 		concurrentBuilds <- struct{}{}
 
 		// Process build event concurrently
@@ -143,11 +144,9 @@ func startBuildProcessor() {
 			defer func() {
 				<-concurrentBuilds
 			}()
-			// events["BUILD_STARTED"] = map[string]interface{}{
-			// 	"timestamp": time.Now(),
-			// }
+
 			// Process the build event here
-			fmt.Printf("Processing build event: %s\n", buildEvent)
+			// fmt.Printf("Processing build event: %s\n", buildEvent)
 
 			buildSuccess, portNumber := dockerImplementation(&buildInfo)
 
