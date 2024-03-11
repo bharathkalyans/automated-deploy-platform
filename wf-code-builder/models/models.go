@@ -13,3 +13,10 @@ type Event struct {
 	Reason    string    `json:"reason,omitempty"`
 	URL       string    `json:"url,omitempty"`
 }
+
+type BuildRequestDetails struct {
+	BuildId          string `json:"build_id"`
+	ProjectGithubUrl string `json:"project_github_url"`
+	BuildCommand     string `json:"build_command"`
+	BuildOutDir      string `json:"build_out_dir"`
+}
