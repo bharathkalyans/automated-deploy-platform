@@ -3,14 +3,12 @@
 package main
 
 import (
-	"code-builder/models"
+	"code-builder/utils"
 	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log"
-	"math/rand"
-	"net"
 	"net/http"
 	"os/exec"
 	"strconv"
@@ -90,7 +88,8 @@ func main() {
 	for {
 		msg, err := consumer.ReadMessage(-1)
 		if err == nil {
-			fmt.Printf("Message on %s: %s\n\n", msg.TopicPartition, string(msg.Value))
+			fmt.Println("Received the kafka Topic")
+			// fmt.Printf("Message on %s: %s\n\n", msg.TopicPartition, string(msg.Value))
 			processBuildEvent(string(msg.Value))
 		} else {
 			fmt.Printf("Consumer error: %v (%v)\n", err, msg)
@@ -135,7 +134,7 @@ func startBuildProcessor() {
 			"timestamp": time.Now(),
 		}
 
-		fmt.Println("Github URL :: ", buildInfo["project_github_url"])
+		// fmt.Println("Github URL :: ", buildInfo["project_github_url"])
 		concurrentBuilds <- struct{}{}
 
 		// Process build event concurrently
@@ -143,11 +142,9 @@ func startBuildProcessor() {
 			defer func() {
 				<-concurrentBuilds
 			}()
-			// events["BUILD_STARTED"] = map[string]interface{}{
-			// 	"timestamp": time.Now(),
-			// }
+
 			// Process the build event here
-			fmt.Printf("Processing build event: %s\n", buildEvent)
+			// fmt.Printf("Processing build event: %s\n", buildEvent)
 
 			buildSuccess, portNumber := dockerImplementation(&buildInfo)
 
@@ -162,24 +159,18 @@ func startBuildProcessor() {
 					"reason":    "External Reasons",
 				}
 			}
-			saveToPostgres(&buildInfo)
-
+			saveToDatabase(&buildInfo)
 		}(buildEvent)
 	}
 }
 
 func dockerImplementation(buildInfo *map[string]interface{}) (bool, string) {
 
-	buildDetails := models.BuildRequestDetails{
-		BuildId:          (*buildInfo)["build_id"].(string),
-		ProjectGithubUrl: (*buildInfo)["project_github_url"].(string),
-		BuildCommand:     (*buildInfo)["build_command"].(string),
-		BuildOutDir:      (*buildInfo)["build_out_dir"].(string),
-	}
+	buildDetails := utils.CreateBuildDetails(buildInfo)
 
 	fmt.Println("Creating docker build....")
 	cmd := exec.Command("docker", "build", "-t", "docker-react-app:latest", ".")
-	cmd.Dir = "./docker-app"
+	cmd.Dir = ""
 
 	if _, err := cmd.CombinedOutput(); err != nil {
 		fmt.Println("Failed to build the image: ", err)
@@ -214,7 +205,7 @@ func dockerImplementation(buildInfo *map[string]interface{}) (bool, string) {
 		"timestamp": time.Now(),
 	}
 
-	port, available := generateAndCheckPort()
+	port, available := utils.GenerateAndCheckPort()
 	if !available {
 		fmt.Println("All ports are in use")
 		events["DEPLOY_FAILED"] = map[string]interface{}{
@@ -260,21 +251,7 @@ func dockerImplementation(buildInfo *map[string]interface{}) (bool, string) {
 	return true, strconv.Itoa(port)
 }
 
-func generateAndCheckPort() (int, bool) {
-
-	// Generate random port between 5000 and 10000
-	port := rand.Intn(5001) + 5000
-
-	listener, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
-	if err != nil {
-		return port, false
-	}
-
-	listener.Close()
-	return port, true
-}
-
-func saveToPostgres(buildInfo *map[string]interface{}) {
+func saveToDatabase(buildInfo *map[string]interface{}) {
 	buildID, ok := (*buildInfo)["build_id"].(string)
 	if !ok {
 		fmt.Println("Build ID not found in build event.")
