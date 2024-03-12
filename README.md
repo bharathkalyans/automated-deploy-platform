@@ -1,6 +1,9 @@
 # GoLang Assignment 3
 
 
+#### Flow of the Application 
+https://github.com/bharathkalyans/golang-webknot-3/assets/49526472/90509547-aae7-4be2-974b-f39ce8e03516
+
 
 #### Start ZooKeeper and Kafka Cluster
 - `make kafka_up` to start the zookeeper and kafka cluster
@@ -22,6 +25,7 @@
 #### How to start the services
 - Open the 2 services in different terminals and make use of Makefile to run the application.
 	
+
 
 
 #### Postman Documentation
