@@ -2,7 +2,10 @@
 
 
 #### Flow of the Application 
-https://github.com/bharathkalyans/golang-webknot-3/assets/49526472/90509547-aae7-4be2-974b-f39ce8e03516
+[//]: # (https://github.com/bharathkalyans/golang-webknot-3/assets/49526472/90509547-aae7-4be2-974b-f39ce8e03516)
+https://github.com/user-attachments/assets/8ce33893-2a37-4eb6-8501-00eb9263af7a
+
+
 
 
 #### Start ZooKeeper and Kafka Cluster
